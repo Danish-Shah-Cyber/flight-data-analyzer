@@ -1,6 +1,6 @@
 # Flight Data Analyzer
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Danish-Shah-Cyber/flight-data-analyzer)
+Deployed on: https://flight-data-analyzer.onrender.com
 
 A Python portfolio project that turns Mission Planner and ArduPilot flight logs
 into a self-contained, readable HTML report. It demonstrates telemetry parsing,
