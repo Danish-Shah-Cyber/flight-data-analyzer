@@ -61,6 +61,16 @@ def read_bin(path: str | Path) -> list[FlightSample]:
             speed = _value(message, "Spd", "GSpd")
             if speed is not None:
                 state.groundspeed_m_s = float(speed)
+            fix = _value(message, "Status", "Fix", "FixType")
+            satellites = _value(message, "NSats", "Sats", "Satellites")
+            hdop = _value(message, "HDop", "HDOP", "Hdop")
+            if fix is not None:
+                state.gps_fix_type = float(fix)
+            if satellites is not None:
+                state.gps_satellites = float(satellites)
+            if hdop is not None:
+                value = float(hdop)
+                state.gps_hdop = value / 100.0 if value > 20.0 else value
             changed = True
         elif kind == "ATT":
             state.roll_deg = float(_value(message, "Roll", default=state.roll_deg))
@@ -95,6 +105,19 @@ def read_bin(path: str | Path) -> list[FlightSample]:
             if remaining is not None:
                 state.battery_remaining_pct = float(remaining)
             changed = True
+        elif kind in {"FUEL", "EFI", "EFI2"}:
+            flow = _value(message, "Flow", "FuelFlow", "fuel_flow", "FFlow")
+            used = _value(message, "Used", "FuelUsed", "consumed_fuel", "Tot")
+            remaining = _value(message, "RemPct", "Remaining", "FuelRemaining")
+            if flow is not None:
+                value = float(flow)
+                state.fuel_flow_l_h = value * 3.6 if 0.0 < value < 10.0 else value
+            if used is not None:
+                value = float(used)
+                state.fuel_used_l = value / 1000.0 if value > 100.0 else value
+            if remaining is not None:
+                state.fuel_remaining_pct = float(remaining)
+            changed = True
         elif kind == "MODE":
             state.mode = str(_value(message, "Mode", "ModeNum", default="UNKNOWN"))
             changed = True
@@ -112,4 +135,3 @@ def read_bin(path: str | Path) -> list[FlightSample]:
     if not samples:
         raise ValueError("No supported ArduPilot flight data was found in the .BIN log")
     return samples
-

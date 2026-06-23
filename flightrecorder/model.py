@@ -26,6 +26,13 @@ class FlightSample:
     battery_voltage_v: float = 0.0
     battery_current_a: float = 0.0
     battery_remaining_pct: float = 100.0
+    fuel_flow_l_h: float = 0.0
+    fuel_used_l: float = 0.0
+    fuel_remaining_pct: float = -1.0
+    gps_fix_type: float = 0.0
+    gps_satellites: float = 0.0
+    gps_hdop: float = 0.0
+    source_integrity: str = "verified"
     mode: str = "UNKNOWN"
     armed: bool = False
 
@@ -35,4 +42,3 @@ class FlightSample:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
-

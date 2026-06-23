@@ -14,6 +14,7 @@ def generate_flight(duration_s: int = 240, seed: int = 42) -> list[FlightSample]
     latitude = 33.6844
     longitude = 73.0479
     battery_pct = 100.0
+    fuel_used_l = 0.0
 
     for second in range(duration_s + 1):
         if second < 20:  # idle and taxi
@@ -47,6 +48,9 @@ def generate_flight(duration_s: int = 240, seed: int = 42) -> list[FlightSample]
         )
         current_a = 1.5 + throttle * 0.28
         battery_pct = max(0.0, battery_pct - current_a / 360.0)
+        fuel_flow_l_h = 0.4 + throttle * 0.035 if armed else 0.0
+        fuel_used_l += fuel_flow_l_h / 3600.0
+        fuel_remaining_pct = max(0.0, 100.0 - fuel_used_l / 2.5 * 100.0)
 
         samples.append(
             FlightSample(
@@ -64,9 +68,14 @@ def generate_flight(duration_s: int = 240, seed: int = 42) -> list[FlightSample]
                 battery_voltage_v=14.8 - (100.0 - battery_pct) * 0.018,
                 battery_current_a=current_a,
                 battery_remaining_pct=battery_pct,
+                fuel_flow_l_h=fuel_flow_l_h,
+                fuel_used_l=fuel_used_l,
+                fuel_remaining_pct=fuel_remaining_pct,
+                gps_fix_type=3.0,
+                gps_satellites=14.0 + rng.choice([-1.0, 0.0, 1.0]),
+                gps_hdop=0.75 + abs(rng.gauss(0, 0.08)),
                 mode=mode,
                 armed=armed,
             )
         )
     return samples
-

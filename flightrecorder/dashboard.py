@@ -35,18 +35,28 @@ MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // (1024 * 1024)
 MAX_REQUEST_BYTES = MAX_UPLOAD_BYTES + 1024 * 1024
 
 
-PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width"><title>Flight Log Analyzer</title><style>
-body{font:16px system-ui;background:#0d1726;color:#eaf2ff;max-width:900px;margin:auto;padding:40px 22px}
-h1{font-size:38px;margin-bottom:8px}.muted{color:#9fb0c8}.panel{background:#15243a;border:1px solid #2c4262;border-radius:16px;padding:26px;margin-top:28px}
-.drop{display:block;border:2px dashed #58769e;border-radius:13px;padding:48px 20px;text-align:center;cursor:pointer;background:#101d30}.drop:hover{border-color:#56b4e9}
-input[type=file]{margin:18px 0}button{background:#56b4e9;color:#07111f;border:0;border-radius:9px;padding:12px 22px;font-weight:700;font-size:16px;cursor:pointer}
-.note{font-size:14px;margin-top:18px}.error{background:#4c1f29;border:1px solid #b95162;padding:14px;border-radius:9px;margin-top:18px}
-</style></head><body><h1>Flight Log Analyzer</h1><p class="muted">Upload Mission Planner telemetry or an ArduPilot onboard log.</p>
-<main class="panel"><form method="post" enctype="multipart/form-data" action="/analyze">
-<label class="drop"><strong>Choose a .tlog or .BIN file</strong><br><span class="muted">Mission Planner telemetry or flight-controller DataFlash log</span><br>
-<input required type="file" name="flight_log" accept=".tlog,.bin"></label><p><button type="submit">Analyze flight</button></p></form>
-<p class="muted note">Uploads are deleted after processing. Maximum file size: {max_upload_mb} MB. The assessment is an engineering aid, not a certified safety determination.</p>{error}</main></body></html>"""
+PAGE = """<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width"><title>Flight Data Dashboard</title><style>
+:root{color-scheme:light;--bg:#f5f7fb;--panel:#fff;--panel-2:#eef2f7;--text:#18202b;--muted:#657184;--line:#d9e0ea;--accent:#1769c2;--danger:#bf3145;--shadow:0 12px 36px rgba(29,39,58,.11)}
+[data-theme=dark]{color-scheme:dark;--bg:#0e131b;--panel:#151d29;--panel-2:#101722;--text:#edf3fb;--muted:#98a7ba;--line:#263447;--accent:#65a9ff;--danger:#ff6678;--shadow:0 16px 40px rgba(0,0,0,.28)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Inter,Segoe UI,Arial,sans-serif}
+.shell{min-height:100vh;display:grid;place-items:center;padding:28px}.panel{width:min(760px,100%);background:var(--panel);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:26px}
+.top{display:flex;justify-content:space-between;gap:18px;align-items:start;margin-bottom:22px}h1{font-family:D-DIN-Bold,"D DIN","Arial Narrow",Arial,sans-serif;letter-spacing:0;font-size:34px;line-height:1.05;margin:0 0 8px}.muted{color:var(--muted)}
+.toggle{border:1px solid var(--line);background:var(--panel-2);color:var(--text);border-radius:8px;padding:9px 11px;cursor:pointer;white-space:nowrap}
+.drop{display:grid;gap:10px;border:1px dashed var(--line);border-radius:8px;padding:34px 20px;text-align:center;cursor:pointer;background:var(--panel-2);margin-bottom:14px}.drop:hover{border-color:var(--accent)}
+input[type=file]{max-width:100%;margin:auto}button.primary{width:100%;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:12px 16px;font-weight:750;font-size:15px;cursor:pointer}
+.facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px}.fact{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:12px}.fact strong{display:block;margin-bottom:3px}
+.note{font-size:14px;margin-top:18px}.error{background:color-mix(in srgb,var(--danger) 14%,var(--panel));border:1px solid var(--danger);padding:14px;border-radius:8px;margin-bottom:16px}
+@media(max-width:720px){.top{display:block}.toggle{margin-top:12px}.facts{grid-template-columns:1fr}}
+</style></head><body><main class="shell"><section class="panel">{error}<div class="top"><div><h1>Flight Data Dashboard</h1><p class="muted">Upload Mission Planner telemetry or an ArduPilot onboard log.</p></div><button class="toggle" id="themeToggle" type="button">Toggle theme</button></div>
+<form method="post" enctype="multipart/form-data" action="/analyze">
+<label class="drop"><strong>Choose a .tlog or .BIN file</strong><span class="muted">The generated dashboard opens after analysis.</span>
+<input required type="file" name="flight_log" accept=".tlog,.bin"></label><button class="primary" type="submit">Analyze flight</button></form>
+<div class="facts"><div class="fact"><strong>Local processing</strong><span class="muted">Uploads are deleted after processing.</span></div><div class="fact"><strong>{max_upload_mb} MB limit</strong><span class="muted">Configurable with MAX_UPLOAD_MB.</span></div><div class="fact"><strong>Evidence first</strong><span class="muted">Reports label missing or weak data.</span></div></div>
+<p class="muted note">Engineering aid only; not a certified safety determination.</p></section></main><script>
+const themeKey="flight-dashboard-theme";document.documentElement.dataset.theme=localStorage.getItem(themeKey)||"light";
+document.getElementById("themeToggle").addEventListener("click",()=>{const next=document.documentElement.dataset.theme==="dark"?"light":"dark";document.documentElement.dataset.theme=next;localStorage.setItem(themeKey,next);});
+</script></body></html>"""
 
 
 def _page(error: str = "") -> bytes:
@@ -67,7 +77,9 @@ def _read_flight_log(upload: Path, suffix: str, temp_dir: str):
     except subprocess.TimeoutExpired as error:
         raise ValueError("Flight-log parsing exceeded the 120-second limit") from error
     if result.returncode != 0:
-        raise ValueError("The flight log could not be parsed")
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        reason = detail[-1] if detail else "No parser details were returned"
+        raise ValueError(f"The flight log could not be parsed: {reason}")
     return read_samples(normalized)
 
 

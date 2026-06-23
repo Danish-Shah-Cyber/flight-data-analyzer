@@ -27,7 +27,7 @@ def read_samples(path: str | Path) -> list[FlightSample]:
                     raw = row.get(name)
                     if raw is None or raw == "":
                         continue
-                    if name == "mode":
+                    if name in {"mode", "source_integrity"}:
                         values[name] = raw
                     elif name == "armed":
                         values[name] = raw.strip().lower() in {"1", "true", "yes"}
@@ -40,4 +40,3 @@ def read_samples(path: str | Path) -> list[FlightSample]:
         raise ValueError("The CSV contains no flight samples")
     samples.sort(key=lambda sample: sample.time_s)
     return samples
-
