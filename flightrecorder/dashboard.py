@@ -18,7 +18,7 @@ from .insights import generate_insights
 from .report import write_html_report
 
 
-DEFAULT_MAX_UPLOAD_MB = 25
+DEFAULT_MAX_UPLOAD_MB = 200
 
 
 def _max_upload_bytes() -> int:
@@ -26,7 +26,7 @@ def _max_upload_bytes() -> int:
         megabytes = int(os.environ.get("MAX_UPLOAD_MB", str(DEFAULT_MAX_UPLOAD_MB)))
     except ValueError:
         megabytes = DEFAULT_MAX_UPLOAD_MB
-    return max(1, min(megabytes, 100)) * 1024 * 1024
+    return max(1, min(megabytes, 200)) * 1024 * 1024
 
 
 MAX_UPLOAD_BYTES = _max_upload_bytes()
@@ -50,8 +50,8 @@ input[type=file]{max-width:100%;margin:auto}button.primary{width:100%;background
 @media(max-width:720px){.top{display:block}.toggle{margin-top:12px}.facts{grid-template-columns:1fr}}
 </style></head><body><main class="shell"><section class="panel">{error}<div class="top"><div><h1>Flight Data Dashboard</h1><p class="muted">Upload Mission Planner telemetry or an ArduPilot onboard log.</p></div><button class="toggle" id="themeToggle" type="button">Toggle theme</button></div>
 <form method="post" enctype="multipart/form-data" action="/analyze">
-<label class="drop"><strong>Choose a .tlog or .BIN file</strong><span class="muted">The generated dashboard opens after analysis.</span>
-<input required type="file" name="flight_log" accept=".tlog,.bin"></label><button class="primary" type="submit">Analyze flight</button></form>
+<label class="drop"><strong>Choose a .tlog, .BIN, or .log file</strong><span class="muted">The generated dashboard opens after analysis.</span>
+<input required type="file" name="flight_log" accept=".tlog,.bin,.log"></label><button class="primary" type="submit">Analyze flight</button></form>
 <div class="facts"><div class="fact"><strong>Local processing</strong><span class="muted">Uploads are deleted after processing.</span></div><div class="fact"><strong>{max_upload_mb} MB limit</strong><span class="muted">Configurable with MAX_UPLOAD_MB.</span></div><div class="fact"><strong>Evidence first</strong><span class="muted">Reports label missing or weak data.</span></div></div>
 <p class="muted note">Engineering aid only; not a certified safety determination.</p></section></main><script>
 const themeKey="flight-dashboard-theme";document.documentElement.dataset.theme=localStorage.getItem(themeKey)||"light";
@@ -120,8 +120,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raise ValueError("Please upload one flight log")
             original = Path(item.filename or "").name
             suffix = Path(original).suffix.lower()
-            if suffix not in {".tlog", ".bin"}:
-                raise ValueError("Please select a .tlog or .BIN file")
+            if suffix not in {".tlog", ".bin", ".log"}:
+                raise ValueError("Please select a .tlog, .BIN, or .log file")
             with tempfile.TemporaryDirectory(prefix="flight-analyzer-") as temp_dir:
                 token = uuid.uuid4().hex[:10]
                 upload = Path(temp_dir) / f"{token}{suffix}"

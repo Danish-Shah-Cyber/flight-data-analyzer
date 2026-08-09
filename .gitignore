@@ -27,3 +27,5 @@ outputs/
 *.tlog
 *.bin
 *.BIN
+*.log
+*.LOG

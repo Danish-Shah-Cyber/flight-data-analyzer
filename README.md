@@ -12,15 +12,15 @@ privacy-conscious upload service without a web framework.
 - Generates a realistic synthetic flight (no hardware required)
 - Imports a normalized CSV file
 - Analyzes takeoff, landing, mode changes, low battery, and key maxima
-- Produces a self-contained HTML report with plots
-- Includes a `.tlog` adapter for Mission Planner telemetry logs
+- Produces a self-contained HTML report with plots, a GPS route map, mode segments, and all normalized data
+- Includes adapters for Mission Planner `.tlog` telemetry and ArduPilot DataFlash `.BIN` / `.log` logs
 
 ## Data flow
 
 ```text
-Mission Planner .tlog -> MAVLink adapter -> normalized samples -> analyzer -> HTML report
-Synthetic flight  ----^                         |
-CSV file -----------^                           +-> events and summary
+Mission Planner .tlog -------> MAVLink adapter -----> normalized samples -> analyzer -> HTML report
+ArduPilot .BIN / .log -------> DataFlash adapter -----^                 +-> map, modes, data table
+Synthetic flight / CSV --------------------------------^                 +-> events and summary
 ```
 
 The normalized CSV columns are documented in `flightrecorder/model.py`. Keeping
@@ -47,8 +47,8 @@ On Windows, start the local dashboard with:
 .\start_dashboard.ps1
 ```
 
-Then upload a Mission Planner `.tlog` or an ArduPilot DataFlash `.BIN`. The file
-is processed locally and the generated report is displayed in the browser.
+Then upload a Mission Planner `.tlog` or an ArduPilot DataFlash `.BIN` / `.log`.
+The file is processed locally and the generated report is displayed in the browser.
 
 To install the parser dependency in a fresh environment first:
 
@@ -72,7 +72,7 @@ The blueprint installs `requirements.txt`, uses the Python version pinned in
 automatically. The free service can sleep when idle, so its first request may
 take longer.
 
-Public uploads are capped at 25 MB by default. Each raw log and generated report
+Public uploads are capped at 200 MB by default. Each raw log and generated report
 is held in an isolated temporary directory, returned directly to the requester,
 and deleted at the end of that request. No database or persistent disk is used.
 Operators should still treat the service as an engineering demonstration: do
@@ -103,6 +103,14 @@ python -m flightrecorder analyze work\flight.csv outputs\flight_report.html
 
 `.tlog` contains only telemetry that reached Mission Planner. It is not as
 complete as the flight controller's onboard `.BIN` log.
+
+## Import an ArduPilot `.BIN` or `.log`
+
+```powershell
+python -m flightrecorder import-bin path\to\flight.BIN work\flight.csv
+python -m flightrecorder import-bin path\to\flight.log work\flight.csv
+python -m flightrecorder analyze work\flight.csv outputs\flight_report.html
+```
 
 To generate a repeatable test log:
 

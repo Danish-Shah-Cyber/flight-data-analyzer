@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 from pathlib import Path
 
 from .analysis import FlightSummary
@@ -33,6 +34,177 @@ def _chart(title: str, field: str, unit: str, color: str, samples: list[FlightSa
         <polyline points="{_polyline(samples, field)}" stroke="{color}"/>
       </svg>
     </div>"""
+
+
+def _valid_route_samples(samples: list[FlightSample]) -> list[FlightSample]:
+    return [
+        sample
+        for sample in samples
+        if -90.0 <= sample.latitude_deg <= 90.0
+        and -180.0 <= sample.longitude_deg <= 180.0
+        and not (sample.latitude_deg == 0.0 and sample.longitude_deg == 0.0)
+    ]
+
+
+def _downsample(samples: list[FlightSample], limit: int = 900) -> list[FlightSample]:
+    if len(samples) <= limit:
+        return samples
+    step = math.ceil(len(samples) / limit)
+    reduced = samples[::step]
+    if reduced[-1] != samples[-1]:
+        reduced.append(samples[-1])
+    return reduced
+
+
+def _distance_m(first: FlightSample, second: FlightSample) -> float:
+    if len(_valid_route_samples([first, second])) < 2:
+        return 0.0
+    radius_m = 6_371_000.0
+    lat1 = math.radians(first.latitude_deg)
+    lat2 = math.radians(second.latitude_deg)
+    dlat = lat2 - lat1
+    dlon = math.radians(second.longitude_deg - first.longitude_deg)
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return radius_m * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _format_position(sample: FlightSample) -> str:
+    if not _valid_route_samples([sample]):
+        return "No GPS"
+    return f"{sample.latitude_deg:.6f}, {sample.longitude_deg:.6f}"
+
+
+def _mode_segments(samples: list[FlightSample]) -> list[dict[str, object]]:
+    if not samples:
+        return []
+    segments: list[dict[str, object]] = []
+    start_index = 0
+    for index, sample in enumerate(samples[1:], start=1):
+        previous = samples[index - 1]
+        if sample.mode != previous.mode or sample.armed != previous.armed:
+            segments.append(_segment_summary(samples, start_index, index - 1))
+            start_index = index
+    segments.append(_segment_summary(samples, start_index, len(samples) - 1))
+    return segments
+
+
+def _segment_summary(samples: list[FlightSample], start_index: int, end_index: int) -> dict[str, object]:
+    segment = samples[start_index : end_index + 1]
+    distance_m = sum(_distance_m(first, second) for first, second in zip(segment, segment[1:]))
+    start = segment[0]
+    end = segment[-1]
+    return {
+        "mode": start.mode,
+        "armed": start.armed,
+        "start_s": start.time_s,
+        "end_s": end.time_s,
+        "duration_s": max(0.0, end.time_s - start.time_s),
+        "distance_km": distance_m / 1000.0,
+        "start_position": _format_position(start),
+        "end_position": _format_position(end),
+    }
+
+
+def _route_map(samples: list[FlightSample]) -> str:
+    route_samples = _valid_route_samples(samples)
+    if len(route_samples) < 2:
+        return "<p class=\"muted\">No usable GPS route was found in this log.</p>"
+
+    width, height, padding = 900, 360, 34
+    projected: list[tuple[FlightSample, float, float]] = []
+    center_lat = sum(sample.latitude_deg for sample in route_samples) / len(route_samples)
+    lon_scale = max(0.01, math.cos(math.radians(center_lat)))
+    raw_x = [sample.longitude_deg * lon_scale for sample in route_samples]
+    raw_y = [sample.latitude_deg for sample in route_samples]
+    min_x, max_x = min(raw_x), max(raw_x)
+    min_y, max_y = min(raw_y), max(raw_y)
+    span_x = max_x - min_x or 0.000001
+    span_y = max_y - min_y or 0.000001
+    for sample, x_value, y_value in zip(route_samples, raw_x, raw_y):
+        x = padding + (x_value - min_x) / span_x * (width - padding * 2)
+        y = height - padding - (y_value - min_y) / span_y * (height - padding * 2)
+        projected.append((sample, x, y))
+
+    palette = ["#1769c2", "#0f8f72", "#b36b00", "#7357c8", "#bf3145", "#0b8f8f"]
+    modes = list(dict.fromkeys(sample.mode for sample in route_samples))
+    mode_colors = {mode: palette[index % len(palette)] for index, mode in enumerate(modes)}
+    mode_labels = "".join(
+        f"<span class=\"legend-item\"><span style=\"background:{mode_colors[mode]}\"></span>{html.escape(mode)}</span>"
+        for mode in modes[:8]
+    )
+
+    paths: list[str] = []
+    current_mode = projected[0][0].mode
+    current_points: list[tuple[float, float]] = []
+    for sample, x, y in projected:
+        if sample.mode != current_mode and len(current_points) > 1:
+            points = " ".join(f"{px:.1f},{py:.1f}" for px, py in current_points)
+            paths.append(f'<polyline points="{points}" stroke="{mode_colors[current_mode]}"/>')
+            current_points = current_points[-1:]
+            current_mode = sample.mode
+        current_points.append((x, y))
+    if len(current_points) > 1:
+        points = " ".join(f"{px:.1f},{py:.1f}" for px, py in current_points)
+        paths.append(f'<polyline points="{points}" stroke="{mode_colors[current_mode]}"/>')
+
+    display_points = _downsample(route_samples, 160)
+    point_lookup = {id(sample): (x, y) for sample, x, y in projected}
+    sample_dots = "".join(
+        f'<circle cx="{point_lookup[id(sample)][0]:.1f}" cy="{point_lookup[id(sample)][1]:.1f}" r="1.8" />'
+        for sample in display_points
+    )
+    start_sample, start_x, start_y = projected[0]
+    end_sample, end_x, end_y = projected[-1]
+    return f"""<div class="route-meta">
+      <div><span class="muted">Start</span><strong>{html.escape(_format_position(start_sample))}</strong></div>
+      <div><span class="muted">End</span><strong>{html.escape(_format_position(end_sample))}</strong></div>
+      <div><span class="muted">GPS points</span><strong>{len(route_samples)}</strong></div>
+    </div>
+    <svg class="route-map" viewBox="0 0 {width} {height}" role="img" aria-label="Drone route map">
+      <rect x="1" y="1" width="{width - 2}" height="{height - 2}" rx="8" class="map-bg"/>
+      <g class="grid-lines">
+        <line x1="180" y1="0" x2="180" y2="{height}"/><line x1="360" y1="0" x2="360" y2="{height}"/>
+        <line x1="540" y1="0" x2="540" y2="{height}"/><line x1="720" y1="0" x2="720" y2="{height}"/>
+        <line x1="0" y1="90" x2="{width}" y2="90"/><line x1="0" y1="180" x2="{width}" y2="180"/>
+        <line x1="0" y1="270" x2="{width}" y2="270"/>
+      </g>
+      <g class="route-path">{"".join(paths)}</g>
+      <g class="route-dots">{sample_dots}</g>
+      <circle cx="{start_x:.1f}" cy="{start_y:.1f}" r="6" class="start-marker"/><text x="{start_x + 9:.1f}" y="{start_y - 9:.1f}">Start</text>
+      <circle cx="{end_x:.1f}" cy="{end_y:.1f}" r="6" class="end-marker"/><text x="{end_x + 9:.1f}" y="{end_y - 9:.1f}">End</text>
+    </svg>
+    <div class="route-legend">{mode_labels}</div>"""
+
+
+def _mode_segments_html(samples: list[FlightSample]) -> str:
+    rows = "".join(
+        f"""<tr>
+          <td>{html.escape(str(segment["mode"]))}</td>
+          <td>{'Yes' if segment["armed"] else 'No'}</td>
+          <td>{segment["start_s"]:.1f}</td>
+          <td>{segment["end_s"]:.1f}</td>
+          <td>{segment["duration_s"]:.1f}</td>
+          <td>{segment["distance_km"]:.3f}</td>
+          <td>{html.escape(str(segment["start_position"]))}</td>
+          <td>{html.escape(str(segment["end_position"]))}</td>
+        </tr>"""
+        for segment in _mode_segments(samples)
+    )
+    return f"""<table><thead><tr><th>Mode</th><th>Armed</th><th>From (s)</th><th>To (s)</th><th>Duration (s)</th><th>Distance (km)</th><th>From</th><th>To</th></tr></thead><tbody>{rows}</tbody></table>"""
+
+
+def _data_explorer(columns: list[str]) -> str:
+    headers = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+    options = "".join(f"<option value=\"{size}\">{size}</option>" for size in [25, 50, 100, 250])
+    return f"""<div class="data-controls">
+      <input class="data-search" type="search" placeholder="Filter all data">
+      <select class="data-page-size" aria-label="Rows per page">{options}</select>
+      <button class="ghost data-prev" type="button">Previous</button>
+      <button class="ghost data-next" type="button">Next</button>
+      <button class="ghost download-csv" type="button">Download CSV</button>
+      <span class="muted data-status"></span>
+    </div>
+    <div class="table-scroll"><table class="data-table"><thead><tr>{headers}</tr></thead><tbody></tbody></table></div>"""
 
 
 def _list(items: list[str], empty: str) -> str:
@@ -97,6 +269,14 @@ def _module_templates(
                     _chart("Battery remaining", "battery_remaining_pct", "%", "#178f61", samples),
                 ]
             ),
+        },
+        "map": {
+            "title": "Route Map",
+            "html": _route_map(samples),
+        },
+        "modes": {
+            "title": "Flight Mode Segments",
+            "html": _mode_segments_html(samples),
         },
         "assessment": {
             "title": "Flight Assessment",
@@ -171,6 +351,10 @@ def _module_templates(
                 + "<p class=\"muted\">Conclusions are bounded by the recorded signals. The tool should label weak evidence instead of filling gaps with guesses.</p>"
             ),
         },
+        "data": {
+            "title": "All Normalized Data",
+            "html": _data_explorer(FlightSample.column_names()),
+        },
         "ai": {
             "title": "AI Analyst Placeholder",
             "html": "<p class=\"muted\">Future module: explain deterministic findings, answer questions, and compare flights without changing raw measurements.</p>",
@@ -205,9 +389,11 @@ def write_html_report(
     quality = quality or assess_data_quality(samples)
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    default_modules = ["quality", "charts", "assessment", "events"]
+    default_modules = ["quality", "map", "modes", "charts", "assessment", "events", "data"]
     module_library = [
         ("quality", "Data Quality", "Signal coverage, gaps, and confidence"),
+        ("map", "Route Map", "Drone path, start/end points, and mode colors"),
+        ("modes", "Mode Segments", "Mode, arm state, time range, and positions"),
         ("charts", "Flight Trends", "Altitude, speed, and battery plots"),
         ("assessment", "Flight Assessment", "Rule-based findings and evidence"),
         ("events", "Event Timeline", "Detected flight events"),
@@ -216,6 +402,7 @@ def write_html_report(
         ("gps", "GPS Health", "Fix type, satellites, and HDOP"),
         ("attitude", "Attitude Review", "Roll, pitch, and yaw"),
         ("limitations", "Analysis Limits", "What this report cannot prove"),
+        ("data", "All Data", "Browse and export every normalized sample"),
         ("ai", "AI Analyst", "Future narrative and Q&A assistant"),
     ]
     library_html = "".join(
@@ -228,14 +415,16 @@ def write_html_report(
       <h2>Analyze Log</h2>
       <form method="post" enctype="multipart/form-data" action="/analyze">
         <label class="upload-drop">
-          <span>Upload .tlog or .BIN</span>
-          <input required type="file" name="flight_log" accept=".tlog,.bin">
+          <span>Upload .tlog, .BIN, or .log</span>
+          <input required type="file" name="flight_log" accept=".tlog,.bin,.log">
         </label>
         <button class="primary" type="submit">Analyze</button>
       </form>
       <p class="muted">Available when viewed from the local dashboard server.</p>
     </section>"""
     default_json = json.dumps(default_modules)
+    sample_json = json.dumps([sample.to_dict() for sample in samples], separators=(",", ":"))
+    column_json = json.dumps(FlightSample.column_names())
     templates = _module_templates(samples, summary, insights, quality)
     warnings = quality.warnings or ["No quality warnings detected"]
     document = f"""<!doctype html>
@@ -294,8 +483,27 @@ button {{ font: inherit; }}
 svg {{ width: 100%; height: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; }}
 polyline {{ fill: none; stroke-width: 3; stroke-linejoin: round; }}
 .axis {{ stroke: var(--line); }}
+.route-meta {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }}
+.route-meta div {{ background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 11px; min-width: 0; }}
+.route-meta strong {{ display: block; margin-top: 4px; overflow-wrap: anywhere; }}
+.route-map text {{ fill: var(--text); font-size: 14px; font-weight: 700; }}
+.map-bg {{ fill: var(--panel-2); stroke: none; }}
+.grid-lines line {{ stroke: var(--line); stroke-width: 1; }}
+.route-path polyline {{ stroke-width: 4; stroke-linecap: round; }}
+.route-dots circle {{ fill: var(--text); opacity: .22; }}
+.start-marker {{ fill: var(--accent-2); stroke: var(--panel); stroke-width: 3; }}
+.end-marker {{ fill: var(--danger); stroke: var(--panel); stroke-width: 3; }}
+.route-legend {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+.legend-item {{ display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 9px; color: var(--muted); }}
+.legend-item span {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
 table {{ width: 100%; border-collapse: collapse; }}
 th, td {{ padding: 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }}
+.table-scroll {{ overflow: auto; max-height: 520px; border: 1px solid var(--line); border-radius: 8px; }}
+.table-scroll table {{ min-width: 1250px; }}
+.table-scroll th {{ position: sticky; top: 0; background: var(--panel-2); z-index: 1; }}
+.data-controls {{ display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }}
+.data-controls input, .data-controls select {{ border: 1px solid var(--line); background: var(--panel-2); color: var(--text); border-radius: 8px; padding: 9px 10px; }}
+.data-controls input {{ min-width: min(260px, 100%); flex: 1; }}
 .assessment {{ font-size: 21px; font-weight: 750; margin-bottom: 12px; }}
 .finding {{ border-left: 4px solid var(--line); background: var(--panel-2); padding: 12px; margin: 10px 0; border-radius: 7px; }}
 .finding-head {{ display: flex; justify-content: space-between; gap: 12px; }}
@@ -307,6 +515,7 @@ ul {{ padding-left: 20px; }}
   .app {{ grid-template-columns: 1fr; }}
   .sidebar {{ position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }}
   .essentials {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+  .route-meta {{ grid-template-columns: 1fr; }}
   .mini-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
   .topbar {{ display: block; }}
 }}
@@ -341,10 +550,83 @@ ul {{ padding-left: 20px; }}
 {templates}
 <script>
 const defaultModules = {default_json};
+const flightSamples = {sample_json};
+const flightColumns = {column_json};
 const workspace = document.getElementById("workspace");
 const storageKey = "flight-dashboard-layout";
 const themeKey = "flight-dashboard-theme";
 let draggedModule = null;
+
+function formatValue(value) {{
+  if (value === null || value === undefined) return "";
+  if (typeof value === "number") {{
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(6).replace(/0+$/, "").replace(/\\.$/, "");
+  }}
+  return String(value);
+}}
+
+function escapeCell(value) {{
+  return formatValue(value).replace(/[&<>"']/g, character => ({{
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  }}[character]));
+}}
+
+function csvCell(value) {{
+  const text = formatValue(value);
+  return /[",\\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
+}}
+
+function initDataExplorer(moduleNode) {{
+  const search = moduleNode.querySelector(".data-search");
+  const pageSize = moduleNode.querySelector(".data-page-size");
+  const previous = moduleNode.querySelector(".data-prev");
+  const next = moduleNode.querySelector(".data-next");
+  const download = moduleNode.querySelector(".download-csv");
+  const status = moduleNode.querySelector(".data-status");
+  const body = moduleNode.querySelector(".data-table tbody");
+  let page = 0;
+
+  function filteredRows() {{
+    const query = search.value.trim().toLowerCase();
+    if (!query) return flightSamples;
+    return flightSamples.filter(row => flightColumns.some(column => formatValue(row[column]).toLowerCase().includes(query)));
+  }}
+
+  function renderRows() {{
+    const rows = filteredRows();
+    const size = Number(pageSize.value) || 25;
+    const maxPage = Math.max(1, Math.ceil(rows.length / size));
+    page = Math.max(0, Math.min(page, maxPage - 1));
+    const start = page * size;
+    const visible = rows.slice(start, start + size);
+    body.innerHTML = visible.map(row => "<tr>" + flightColumns.map(column => "<td>" + escapeCell(row[column]) + "</td>").join("") + "</tr>").join("");
+    status.textContent = rows.length ? (start + 1) + "-" + (start + visible.length) + " of " + rows.length : "0 of 0";
+    previous.disabled = page === 0;
+    next.disabled = page >= maxPage - 1;
+  }}
+
+  search.addEventListener("input", () => {{ page = 0; renderRows(); }});
+  pageSize.addEventListener("change", () => {{ page = 0; renderRows(); }});
+  previous.addEventListener("click", () => {{ page -= 1; renderRows(); }});
+  next.addEventListener("click", () => {{ page += 1; renderRows(); }});
+  download.addEventListener("click", () => {{
+    const rows = filteredRows();
+    const csv = [flightColumns.join(",")].concat(rows.map(row => flightColumns.map(column => csvCell(row[column])).join(","))).join("\\n");
+    const blob = new Blob([csv], {{ type: "text/csv" }});
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "normalized-flight-data.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }});
+  renderRows();
+}}
 
 function createModule(id) {{
   const template = document.getElementById(`template-${{id}}`);
@@ -364,6 +646,7 @@ function createModule(id) {{
     draggedModule = null;
     saveLayout();
   }});
+  if (id === "data") initDataExplorer(node);
   return node;
 }}
 
