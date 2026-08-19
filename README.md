@@ -7,6 +7,14 @@ into a self-contained, readable HTML report. It demonstrates telemetry parsing,
 time-series analysis, event detection, engineering heuristics, and a small
 privacy-conscious upload service without a web framework.
 
+## Professional Reviewer Roadmap
+
+A separate professional product plan is being developed under
+`docs/flight-log-reviewer-pro/`. It defines the next-generation workflow with
+PX4 `.ulg`, ArduPilot `.bin` / `.log`, MAVLink `.tlog`, Cesium 3D route maps,
+mode-colored timelines, synchronized plots, automated findings, reviewer notes,
+and exportable reports.
+
 ## What works now
 
 - Generates a realistic synthetic flight (no hardware required)
